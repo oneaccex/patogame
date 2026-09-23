@@ -1,0 +1,62 @@
+# Publica patogame.oneaccex.com: toma el tag MÁS NUEVO de anfcadavidag/patogame y lo sube al bucket.
+# Corre cada 5 min (GitHub puede retrasarlo) y con el botón "Run workflow" (se puede pedir un tag
+# puntual para volver atrás). Credenciales: OIDC → rol oneaccex-patogame-deploy (solo ese bucket).
+name: publicar
+on:
+  schedule: [{ cron: "*/5 * * * *" }]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag a publicar (vacío = el más nuevo). Ej: v1.1 para volver atrás"
+        required: false
+permissions:
+  contents: write   # anotar en VERSION qué está publicado
+  id-token: write   # OIDC hacia AWS
+concurrency: { group: publicar, cancel-in-progress: false }
+env:
+  FUENTE: https://github.com/anfcadavidag/patogame
+  BUCKET: oneaccex-patogame-252922283446
+  ROL: arn:aws:iam::252922283446:role/oneaccex-patogame-deploy
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: ¿Hay versión nueva?
+        id: v
+        run: |
+          set -euo pipefail
+          PEDIDO="${{ github.event.inputs.tag }}"
+          if [ -n "$PEDIDO" ]; then TAG="$PEDIDO"; else
+            TAG=$(git ls-remote --tags --refs "$FUENTE" | sed 's#.*refs/tags/##' | sort -V | tail -1)
+          fi
+          [ -n "$TAG" ] || { echo "sin tags en la fuente"; exit 0; }
+          ACTUAL=$(cat VERSION 2>/dev/null || true)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "$TAG" = "$ACTUAL" ] && [ -z "$PEDIDO" ]; then echo "ya publicado: $TAG"; echo "nuevo=no" >> "$GITHUB_OUTPUT"
+          else echo "publicar: $ACTUAL → $TAG"; echo "nuevo=si" >> "$GITHUB_OUTPUT"; fi
+      - name: Bajar el juego (solo archivos, nada se ejecuta)
+        if: steps.v.outputs.nuevo == 'si'
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "${{ steps.v.outputs.tag }}" "$FUENTE" fuente
+          SRC=fuente; [ -f fuente/dist/index.html ] && SRC=fuente/dist
+          [ -f "$SRC/index.html" ] || { echo "no hay index.html en la raíz ni en dist/"; exit 1; }
+          mkdir sitio && rsync -a --exclude '.git*' --exclude 'README*' --exclude '*.md' --exclude '.env*' "$SRC/" sitio/
+          ls -la sitio
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.v.outputs.nuevo == 'si'
+        with: { role-to-assume: "${{ env.ROL }}", aws-region: us-east-1 }
+      - name: Subir y refrescar CloudFront
+        if: steps.v.outputs.nuevo == 'si'
+        run: |
+          set -euo pipefail
+          aws s3 sync sitio/ "s3://$BUCKET/" --delete
+          aws cloudfront create-invalidation --distribution-id "${{ vars.DIST_ID }}" --paths '/*' --query Invalidation.Id --output text
+      - name: Anotar versión publicada
+        if: steps.v.outputs.nuevo == 'si'
+        run: |
+          echo "${{ steps.v.outputs.tag }}" > VERSION
+          git config user.name "patogame-bot"; git config user.email "actions@github.com"
+          git add VERSION && git commit -qm "publicado ${{ steps.v.outputs.tag }}" && git push -q || echo "sin cambios en VERSION"

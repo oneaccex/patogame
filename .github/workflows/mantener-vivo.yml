@@ -1,0 +1,18 @@
+# GitHub apaga los workflows programados de un repo público tras 60 días sin commits.
+# Un commit mensual (fecha en .vivo) mantiene activo el chequeo de 'publicar'.
+name: mantener-vivo
+on:
+  schedule: [{ cron: "0 12 1 * *" }]   # día 1 de cada mes
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  vivo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          date -u +%F > .vivo
+          git config user.name "patogame-bot"; git config user.email "actions@github.com"
+          git add .vivo && git commit -qm "mantener vivo $(date -u +%F)" && git push -q
