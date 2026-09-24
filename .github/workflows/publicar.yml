@@ -1,6 +1,6 @@
 # Publica patogame.oneaccex.com: toma el tag MÁS NUEVO de anfcadavidag/patogame y lo sube al bucket.
-# Corre cada 5 min (GitHub puede retrasarlo) y con el botón "Run workflow" (se puede pedir un tag
-# puntual para volver atrás). Credenciales: OIDC → rol oneaccex-patogame-deploy (solo ese bucket).
+# Se dispara al instante cuando Andrés crea un tag (su repo llama a workflow_dispatch con un token que
+# SOLO puede disparar workflows de este repo); respaldo cada 5 min; botón "Run workflow" para volver atrás. Credenciales: OIDC → rol oneaccex-patogame-deploy (solo ese bucket).
 name: publicar
 on:
   schedule: [{ cron: "*/5 * * * *" }]
@@ -25,9 +25,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: ¿Hay versión nueva?
         id: v
+        env:
+          PEDIDO: ${{ github.event.inputs.tag }}   # por env, nunca interpolado en el script
         run: |
           set -euo pipefail
-          PEDIDO="${{ github.event.inputs.tag }}"
+          if [ -n "$PEDIDO" ] && ! [[ "$PEDIDO" =~ ^v[0-9][0-9A-Za-z._-]{0,30}$ ]]; then echo "tag inválido: $PEDIDO"; exit 1; fi
+          if [ -n "$PEDIDO" ] && ! git ls-remote --tags --refs "$FUENTE" "refs/tags/$PEDIDO" | grep -q .; then echo "no existe el tag $PEDIDO"; exit 1; fi
           if [ -n "$PEDIDO" ]; then TAG="$PEDIDO"; else
             TAG=$(git ls-remote --tags --refs "$FUENTE" | sed 's#.*refs/tags/##' | sort -V | tail -1)
           fi
